@@ -1,0 +1,56 @@
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup update stable && rustup default stable
+      - run: rustup target add thumbv7em-none-eabihf
+      - run: cargo fmt --check
+      - run: cargo build
+      - run: cargo build --no-default-features
+      # The no_std claim is only proven against a real bare-metal target.
+      - run: cargo build --no-default-features --target thumbv7em-none-eabihf
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo clippy --no-default-features -- -D warnings
+      - run: cargo clippy --no-default-features --features logging -- -D warnings
+      - run: cargo test
+      - run: cargo test --no-default-features
+      - run: cargo doc --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+      # The declared rust-version must actually build.
+      - run: rustup toolchain install 1.88 --profile minimal
+      - run: cargo +1.88 check --all-features
+
+  miri:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Miri validates the `repr(transparent)` casts in `src/path.rs`.
+      - run: rustup toolchain install nightly --component miri
+      - run: cargo +nightly miri test --lib
+        env:
+          MIRIFLAGS: -Zmiri-disable-isolation
+
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install nightly
+      - run: cargo install cargo-fuzz
+      # Smoke-run every target briefly so the harnesses can't bit-rot and
+      # a fast crash is caught in CI (not an exhaustive fuzz campaign).
+      - run: cargo +nightly fuzz run codec -- -max_total_time=30
+      - run: cargo +nightly fuzz run mount -- -max_total_time=30
+      - run: cargo +nightly fuzz run ops -- -max_total_time=30
+      - run: cargo +nightly fuzz run write -- -max_total_time=30

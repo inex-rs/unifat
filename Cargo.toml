@@ -1,0 +1,28 @@
+[package]
+name = "unifat"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "no_std-friendly FAT16/32 and ExFAT filesystem driver with one unified API."
+repository = "https://github.com/inex-rs/unifat"
+license = "MPL-2.0"
+keywords = ["fat", "fat32", "exfat", "filesystem", "no-std"]
+categories = ["filesystem", "embedded", "no-std"]
+exclude = [".github/"]
+
+[dependencies]
+embedded-io = { version = "0.7", features = ["alloc"] }
+log = { version = "0.4", optional = true }
+time = { version = "0.3", default-features = false, features = [
+    "alloc",
+    "macros",
+] }
+
+[dev-dependencies]
+flate2 = "1"
+
+[features]
+default = ["std"]
+std = ["time/std", "time/local-offset"]
+logging = ["dep:log"]
+__fuzz = []
