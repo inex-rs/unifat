@@ -11,7 +11,7 @@ exclude = [".github/"]
 
 [dependencies]
 embedded-io = { version = "0.7", features = ["alloc"] }
-layline = { version = "0.3.3", default-features = false, features = [
+layline = { version = "0.4.0", default-features = false, features = [
     "derive",
     "alloc",
 ] }

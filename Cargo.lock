@@ -47,9 +47,9 @@ dependencies = [
 
 [[package]]
 name = "layline"
-version = "0.3.3"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "be696858fc0ff13875de6751f3d576377b4cb2037dfdb312687325cc18cad601"
+checksum = "8dd0870deaafedf80c072a00dc10cad3e8874d315a057a03c18ca693ae8bc894"
 dependencies = [
  "layline-core",
  "layline-derive",
@@ -57,9 +57,9 @@ dependencies = [
 
 [[package]]
 name = "layline-codegen"
-version = "0.3.3"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "05365d13c53522f0dad85985be756897def4e7b9d48abe9dd0764e8645e69433"
+checksum = "3090ba13df4df0837cf30bda7b936001308fe8ddca720e94f0c6185382699ef0"
 dependencies = [
  "layline-core",
  "proc-macro2",
@@ -69,15 +69,15 @@ dependencies = [
 
 [[package]]
 name = "layline-core"
-version = "0.3.3"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "de5d0b0fcee34847d8ac3b5fe254c8ba3b2e8c3cab4c2b87d556871a0c6243cf"
+checksum = "c6bb9675b339c5ef1e5d136a0271bd8bf402ea638849628092ea399050399790"
 
 [[package]]
 name = "layline-derive"
-version = "0.3.3"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "459dfeb026896e2014f52ba344ca15ac67b8c5e62208a4722bfedc3e1926478b"
+checksum = "a31546f5f89833e77d6e03a4f464687a3967546ddbe425d1942e890c779c4509"
 dependencies = [
  "layline-codegen",
  "proc-macro2",
