@@ -2,6 +2,8 @@
 
 use alloc::string::String;
 
+use layline::Layout;
+
 use crate::path::path_consts;
 
 pub(crate) const SFN_NAME_LEN: usize = 8;
@@ -9,11 +11,12 @@ pub(crate) const SFN_EXT_LEN: usize = 3;
 /// Includes the `.` between name and extension when decoded.
 pub(crate) const SFN_LEN: usize = SFN_NAME_LEN + 1 + SFN_EXT_LEN;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// The 8.3 short filename every FAT entry carries alongside any LFN.
+#[derive(Layout, Debug, Clone, Copy, PartialEq, Eq)]
+#[layout(bytes = 11)]
 pub(crate) struct Sfn {
-    pub(crate) name: [u8; SFN_NAME_LEN],
-    pub(crate) ext: [u8; SFN_EXT_LEN],
+    pub(crate) name: [u8; 8],
+    pub(crate) ext: [u8; 3],
 }
 
 pub(crate) const CURRENT_DIR_SFN: Sfn = Sfn {
@@ -36,16 +39,9 @@ pub(crate) const PARENT_DIR_SFN: Sfn = Sfn {
 };
 
 impl Sfn {
-    fn bytes(&self) -> [u8; SFN_NAME_LEN + SFN_EXT_LEN] {
-        let mut slice = [0; SFN_NAME_LEN + SFN_EXT_LEN];
-        slice[..SFN_NAME_LEN].copy_from_slice(&self.name);
-        slice[SFN_NAME_LEN..].copy_from_slice(&self.ext);
-        slice
-    }
-
     pub(crate) fn gen_checksum(&self) -> u8 {
         let mut sum = 0;
-        for c in self.bytes() {
+        for c in self.encode() {
             sum = (if (sum & 1) != 0 { 0x80_u8 } else { 0_u8 })
                 .wrapping_add(sum >> 1)
                 .wrapping_add(c)
@@ -53,7 +49,7 @@ impl Sfn {
         sum
     }
 
-    pub(crate) fn decode(&self) -> String {
+    pub(crate) fn to_name(self) -> String {
         let mut name = self.name;
         // 0x05 is the on-disk escape for a real leading 0xE5 (0xE5 marks
         // a deleted slot); restore it before decoding.

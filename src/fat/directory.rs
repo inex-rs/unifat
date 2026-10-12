@@ -10,14 +10,13 @@ use alloc::vec::Vec;
 
 use embedded_io::{Read, Seek, Write};
 
-use crate::codec::FixedCodec;
 use crate::dir::Metadata;
 use crate::error::{CorruptKind, FsError, FsResult};
 use crate::name::NameEq;
 use crate::path::{Path, PathBuf, WindowsComponent, path_consts};
 use crate::vfs::{Directory, EntryPatch, NewEntry};
 
-use super::direntry::{DIRENTRY_SIZE, MinProperties, RawAttributes, RawDirEntry};
+use super::direntry::{MinProperties, RawAttributes, RawDirEntry};
 use super::{Ebr, FatDir, FatSlotIter, FatVfs, RawProperties};
 
 /// Ephemeral path-pure directory handle.
@@ -276,8 +275,7 @@ where
                 )?
                 .ok_or(FsError::Corrupt(CorruptKind::DirEntry))?;
             let existing = self.fs.read_slot(dotdot)?;
-            let is_dotdot =
-                RawDirEntry::parse(&existing[..]).is_some_and(|e| e.sfn == super::PARENT_DIR_SFN);
+            let is_dotdot = RawDirEntry::decode(&existing).sfn == super::PARENT_DIR_SFN;
             if !is_dotdot {
                 return Err(FsError::Corrupt(CorruptKind::DirEntry));
             }
@@ -294,8 +292,7 @@ where
                 nt_res: 0,
                 ea_handle: (!fat32).then_some(0),
             };
-            let mut bytes = [0u8; DIRENTRY_SIZE];
-            RawDirEntry::from(parent_entry).write_into(&mut bytes);
+            let bytes = RawDirEntry::from(parent_entry).encode();
             self.fs.write_slot(dotdot, &bytes)?;
         }
         Ok(())
@@ -313,8 +310,7 @@ mod tests {
     use super::*;
     use crate::error::FsError;
     use crate::fat::{
-        CURRENT_DIR_SFN, DIRENTRY_SIZE, MinProperties, RawAttributes, RawDirEntry, SLOT_DELETED,
-        SLOT_END,
+        CURRENT_DIR_SFN, MinProperties, RawAttributes, RawDirEntry, SLOT_DELETED, SLOT_END,
     };
     use crate::options::FsOptions;
     use crate::path::path_consts;
@@ -365,8 +361,7 @@ mod tests {
                     nt_res: 0,
                     ea_handle: Some(0),
                 };
-                let mut bytes = [0u8; DIRENTRY_SIZE];
-                RawDirEntry::from(props).write_into(&mut bytes);
+                let mut bytes = RawDirEntry::from(props).encode();
                 // Ensure the first byte is a printable SFN char, not 0x00/0xE5.
                 bytes[0] = b'A'.wrapping_add((n % 26) as u8);
                 fs.write_slot(pos, &bytes).expect("stamp slot");

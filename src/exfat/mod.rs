@@ -50,7 +50,6 @@ use crate::codec::exfat::boot::{EXFAT_BOOT_RECORD_SIZE, ExfatBootRecord};
 use crate::codec::exfat::raw_entry::ExfatClusteredMetaEntry;
 pub(crate) use direntry::ExfatAttributes;
 pub(crate) use direntry::ExfatDirEntry;
-pub(crate) use direntry::entry_set_checksum;
 use upcase::load_upcase_table;
 
 // On-disk constants live in the pure codec layer (re-export for submodules).
@@ -149,9 +148,9 @@ where
         if !crate::boot::has_exfat_magic(&vbr) {
             return Err(FsError::Unsupported);
         }
-        use crate::codec::FixedCodec;
-        let boot = ExfatBootRecord::parse(&vbr[..EXFAT_BOOT_RECORD_SIZE])
-            .ok_or(FsError::Corrupt(CorruptKind::Codec))?;
+        let boot = ExfatBootRecord::decode(
+            crate::codec::window(&vbr).ok_or(FsError::Corrupt(CorruptKind::Codec))?,
+        );
         // Reject adversarial out-of-range shifts before any size arithmetic.
         if !boot.shifts_valid() {
             log_error!("ExFAT VBR has out-of-range sector/cluster shifts");
@@ -214,7 +213,9 @@ where
                 }
                 match ty {
                     ENTRY_TYPE_ALLOCATION_BITMAP | ENTRY_TYPE_UPCASE_TABLE => {
-                        if let Some(meta) = ExfatClusteredMetaEntry::parse(entry) {
+                        if let Some(meta) =
+                            crate::codec::window(entry).map(ExfatClusteredMetaEntry::decode)
+                        {
                             let range = ClusterRange {
                                 first_cluster: meta.first_cluster,
                                 byte_length: meta.data_length,

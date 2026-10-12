@@ -1,12 +1,12 @@
 //! Pure entry-set composition helpers (no I/O beyond byte packing).
 
-use alloc::vec;
 use alloc::vec::Vec;
 
+use layline::Message;
+
+use super::ExfatAttributes;
 use super::timestamp::{EntryTimes, encode_date, encode_datetime};
-use super::{ExfatAttributes, entry_set_checksum};
-use crate::codec::exfat::consts::EXFAT_ENTRY_SIZE;
-use crate::codec::exfat::raw_entry::{ExfatFileEntry, ExfatFileNameEntry, ExfatStreamExtension};
+use crate::codec::exfat::{entry_set::ExfatEntrySet, raw_entry::ExfatStreamExtension};
 
 /// Compose a File + Stream Extension + File Name entry set with a valid
 /// `SetChecksum`. Pure function; the caller must reject names longer than 255
@@ -50,29 +50,6 @@ pub(super) fn compose_file_entry_set_full(
     times: EntryTimes,
 ) -> Vec<u8> {
     let name_u16: Vec<u16> = name.encode_utf16().collect();
-    let name_entries = name_u16.len().div_ceil(15).max(1);
-    let secondary_count = 1 + name_entries; // Stream + N FileName
-    let total_entries = 1 + secondary_count;
-    let mut set = vec![0u8; total_entries * EXFAT_ENTRY_SIZE];
-
-    let secondary_count_u8 = u8::try_from(secondary_count)
-        .expect("callers cap names at 255 UCS-2 units, so at most 18 entries");
-    let mut file = ExfatFileEntry::new_zeroed(secondary_count_u8, attributes.bits());
-    if let Some(dt) = times.created {
-        let (ts, incr) = encode_datetime(dt);
-        file.create_timestamp = ts;
-        file.create_10ms = incr;
-    }
-    if let Some(dt) = times.modified {
-        let (ts, incr) = encode_datetime(dt);
-        file.modified_timestamp = ts;
-        file.modified_10ms = incr;
-    }
-    if let Some(date) = times.accessed {
-        file.accessed_timestamp = encode_date(date);
-    }
-    file.write_into(&mut set[..EXFAT_ENTRY_SIZE]);
-
     let name_len = u8::try_from(name_u16.len()).expect("callers cap names at 255 UCS-2 units");
     let mut stream = ExfatStreamExtension::new(
         name_len,
@@ -82,17 +59,21 @@ pub(super) fn compose_file_entry_set_full(
         no_fat_chain,
     );
     stream.name_hash = name_hash;
-    stream.write_into(&mut set[EXFAT_ENTRY_SIZE..EXFAT_ENTRY_SIZE * 2]);
 
-    for (i, chunk) in name_u16.chunks(15).enumerate() {
-        let off = EXFAT_ENTRY_SIZE * (2 + i);
-        ExfatFileNameEntry::from_units(chunk).write_into(&mut set[off..off + EXFAT_ENTRY_SIZE]);
+    let mut set = ExfatEntrySet::new(&name_u16, attributes.bits(), stream);
+    if let Some(dt) = times.created {
+        let (ts, incr) = encode_datetime(dt);
+        set.create_timestamp = ts;
+        set.create_10ms = incr;
     }
-
-    // Checksum field must be zero while hashing, then written back.
-    set[0x02] = 0;
-    set[0x03] = 0;
-    let sum = entry_set_checksum(&set);
-    set[0x02..0x04].copy_from_slice(&sum.to_le_bytes());
-    set
+    if let Some(dt) = times.modified {
+        let (ts, incr) = encode_datetime(dt);
+        set.modified_timestamp = ts;
+        set.modified_10ms = incr;
+    }
+    if let Some(date) = times.accessed {
+        set.accessed_timestamp = encode_date(date);
+    }
+    // Encode stamps SecondaryCount and SetChecksum.
+    set.encode()
 }

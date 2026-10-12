@@ -3,7 +3,6 @@
 use alloc::boxed::Box;
 
 use super::*;
-use crate::codec::FixedCodec;
 use crate::error::*;
 use crate::vfs::EntryPatch;
 use core::num::NonZero;
@@ -263,9 +262,7 @@ where
             nt_res: 0,
             ea_handle: (!fat32).then_some(0),
         };
-        let mut bytes = [0u8; DIRENTRY_SIZE];
-        RawDirEntry::from(props).write_into(&mut bytes);
-        bytes
+        RawDirEntry::from(props).encode()
     }
 
     /// Sync the [`Fat32FsInfo`] back to the medium (FAT32 only).
@@ -274,12 +271,10 @@ where
             return Ok(());
         }
         if let Ebr::Fat32(ebr_fat32, fsinfo) = &self.boot_record.borrow().ebr {
-            let mut bytes = [0u8; FSINFO_SIZE];
-            fsinfo.write_into(&mut bytes);
-            self.write_bytes(
-                self.sector_byte_offset(SectorIndex::from(ebr_fat32.fat_info)),
-                &bytes,
-            )?;
+            // Lead signature + body; the reserved bytes between are left as is.
+            let sector = self.sector_byte_offset(SectorIndex::from(ebr_fat32.fat_info));
+            self.write_bytes(sector, &Fat32FsInfoLead::VALID.encode())?;
+            self.write_bytes(sector + FSINFO_OFFSET as u64, &fsinfo.encode())?;
         }
         self.fsinfo_modified.set(false);
         Ok(())
@@ -324,8 +319,7 @@ where
             props.attributes = RawAttributes::from_attributes(attrs, is_dir);
         }
 
-        let mut bytes = [0u8; DIRENTRY_SIZE];
-        RawDirEntry::from(props.clone()).write_into(&mut bytes);
+        let bytes = RawDirEntry::from(props.clone()).encode();
 
         // The SFN is the last slot of the LFN+SFN set.
         let sfn_pos = self

@@ -10,13 +10,14 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use embedded_io::{Read, Seek, Write};
+use layline::Message;
 
 use super::direntry::{DirEntryDecoder, DirExtent, SetLoc};
 use super::{
     END_OF_DIRECTORY, ENTRY_IN_USE, ENTRY_TYPE_FILE, EXFAT_ENTRY_SIZE, ExfatVfs, FAT_EOC,
-    cluster_to_byte_offset, entry_set_checksum,
+    cluster_to_byte_offset,
 };
-use crate::codec::exfat::raw_entry::ExfatStreamExtension;
+use crate::codec::exfat::entry_set::ExfatEntrySet;
 use crate::error::{CorruptKind, FsError, FsResult};
 
 impl<S> ExfatVfs<S>
@@ -222,22 +223,17 @@ where
         loc: &SetLoc,
         added_bytes: usize,
     ) -> FsResult<(), S::Error> {
-        let mut set = self.read_set(loc)?;
-        // Stream Extension is the first secondary, at offset 32.
-        let stream_off = EXFAT_ENTRY_SIZE;
-        let mut stream =
-            ExfatStreamExtension::parse(&set[stream_off..stream_off + EXFAT_ENTRY_SIZE])
-                .ok_or(FsError::Corrupt(CorruptKind::DirEntry))?;
-        stream.set_no_fat_chain(false);
+        let raw = self.read_set(loc)?;
+        let (mut set, _) =
+            ExfatEntrySet::decode(&raw).map_err(|_| FsError::Corrupt(CorruptKind::DirEntry))?;
         // Growth always FAT-chains; bump both length fields.
+        let stream = &mut set.stream;
+        stream.set_no_fat_chain(false);
         let new_dl = stream.data_length + added_bytes as u64;
         stream.data_length = new_dl;
         stream.valid_data_length = new_dl;
-        stream.write_into(&mut set[stream_off..stream_off + EXFAT_ENTRY_SIZE]);
-        set[0x02] = 0;
-        set[0x03] = 0;
-        let sum = entry_set_checksum(&set);
-        set[0x02..0x04].copy_from_slice(&sum.to_le_bytes());
+        // Encode recomputes the SetChecksum.
+        let set = set.encode();
         self.write_set(loc, &set)
     }
 

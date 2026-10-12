@@ -46,6 +46,46 @@ dependencies = [
 ]
 
 [[package]]
+name = "layline"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "be696858fc0ff13875de6751f3d576377b4cb2037dfdb312687325cc18cad601"
+dependencies = [
+ "layline-core",
+ "layline-derive",
+]
+
+[[package]]
+name = "layline-codegen"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "05365d13c53522f0dad85985be756897def4e7b9d48abe9dd0764e8645e69433"
+dependencies = [
+ "layline-core",
+ "proc-macro2",
+ "quote",
+ "syn 3.0.8",
+]
+
+[[package]]
+name = "layline-core"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "de5d0b0fcee34847d8ac3b5fe254c8ba3b2e8c3cab4c2b87d556871a0c6243cf"
+
+[[package]]
+name = "layline-derive"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "459dfeb026896e2014f52ba344ca15ac67b8c5e62208a4722bfedc3e1926478b"
+dependencies = [
+ "layline-codegen",
+ "proc-macro2",
+ "quote",
+ "syn 3.0.8",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.186"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -123,7 +163,7 @@ checksum = "d540f220d3187173da220f885ab66608367b6574e925011a9353e4badda91d79"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.118",
 ]
 
 [[package]]
@@ -137,6 +177,17 @@ name = "syn"
 version = "2.0.118"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1b9ae57f904213ebb649ce6895b8a66c66f0203b9319718f69a5612a065b1422"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "unicode-ident",
+]
+
+[[package]]
+name = "syn"
+version = "3.0.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "01016da373cd8f7ef12624f796309f5c31ba8d646dd08856c02cd741d823c622"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -187,6 +238,7 @@ version = "0.1.0"
 dependencies = [
  "embedded-io",
  "flate2",
+ "layline",
  "log",
  "time",
 ]

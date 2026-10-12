@@ -55,7 +55,7 @@ impl Properties {
     /// The decoded 8.3 short name backing this entry.
     #[allow(dead_code)] // SFN accessor for tooling / future public metadata
     pub(crate) fn sfn(&self) -> String {
-        self.sfn.decode()
+        self.sfn.to_name()
     }
 
     #[inline]

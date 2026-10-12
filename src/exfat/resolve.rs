@@ -7,7 +7,7 @@ use embedded_io::{Read, Seek, Write};
 
 use super::direntry::{DirExtent, ExfatDirEntry};
 use super::{EXFAT_ENTRY_SIZE, ExfatReadDir, ExfatVfs};
-use crate::codec::exfat::raw_entry::ExfatStreamExtension;
+use crate::codec::exfat::raw_entry::stream_of;
 use crate::error::{FsError, FsResult};
 use crate::name::split_components;
 
@@ -100,9 +100,7 @@ where
         let Ok(set) = self.read_set(&loc) else {
             return *ext;
         };
-        let Some(stream) =
-            ExfatStreamExtension::parse(&set[EXFAT_ENTRY_SIZE..EXFAT_ENTRY_SIZE * 2])
-        else {
+        let Some(stream) = stream_of(&set) else {
             return *ext;
         };
         let cluster_bytes = u64::from(self.boot.bytes_per_cluster());
@@ -152,7 +150,7 @@ where
     /// copies go stale when directory growth updates the entry.
     fn refresh_stream_extension(&self, loc: &super::direntry::SetLoc) -> Option<(u64, bool)> {
         let set = self.read_set(loc).ok()?;
-        let stream = ExfatStreamExtension::parse(&set[EXFAT_ENTRY_SIZE..EXFAT_ENTRY_SIZE * 2])?;
+        let stream = stream_of(&set)?;
         Some((stream.data_length, stream.no_fat_chain()))
     }
 }

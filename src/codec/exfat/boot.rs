@@ -1,13 +1,15 @@
 //! Pure ExFAT Volume Boot Record layout (bytes ↔ struct).
 
-use crate::codec::{FixedCodec, bytes, le_u16, le_u32, le_u64, put_u16, put_u32, put_u64};
+use layline::Layout;
 
 /// Size of the fixed portion of the ExFAT VBR we decode; the rest of
 /// the sector holds boot code / CRC fields a mount doesn't need.
-pub(crate) const EXFAT_BOOT_RECORD_SIZE: usize = 120;
+pub(crate) const EXFAT_BOOT_RECORD_SIZE: usize = <ExfatBootRecord as Layout>::WIRE_BYTES;
 
 /// VolumeFlags (bytes 106–107) and PercentInUse (byte 112) are excluded
-/// from the boot-region checksum so they can be updated in place.
+/// from the boot-region checksum so they can be updated in place. Kept
+/// hand-written: layline's `#[checksum]` can excise only its own field,
+/// not other fields inside the covered range.
 const CHECKSUM_EXCLUDED: [usize; 3] = [106, 107, 112];
 
 /// One step of the exFAT rolling `u32` checksum: rotate right by one,
@@ -41,7 +43,8 @@ pub(crate) fn upcase_table_checksum(table: &[u8]) -> u32 {
 }
 
 /// The fixed head of an ExFAT Volume Boot Record.
-#[derive(Debug, Clone)]
+#[derive(Layout, Debug, Clone)]
+#[layout(bytes = 120, endian = le)]
 pub(crate) struct ExfatBootRecord {
     pub _dummy_jmp: [u8; 3],
     pub _oem_identifier: [u8; 8],
@@ -62,60 +65,6 @@ pub(crate) struct ExfatBootRecord {
     pub drive_select: u8,
     pub used_percentage: u8,
     pub _reserved: [u8; 7],
-}
-
-impl FixedCodec for ExfatBootRecord {
-    const SIZE: usize = EXFAT_BOOT_RECORD_SIZE;
-
-    fn parse(b: &[u8]) -> Option<Self> {
-        if b.len() < Self::SIZE {
-            return None;
-        }
-        Some(Self {
-            _dummy_jmp: bytes(b, 0),
-            _oem_identifier: bytes(b, 3),
-            _zeroed: bytes(b, 11),
-            _partition_offset: le_u64(b, 64),
-            volume_len: le_u64(b, 72),
-            fat_offset: le_u32(b, 80),
-            fat_len: le_u32(b, 84),
-            cluster_heap_offset: le_u32(b, 88),
-            cluster_count: le_u32(b, 92),
-            root_dir_cluster: le_u32(b, 96),
-            partition_serial_num: le_u32(b, 100),
-            fs_revision: le_u16(b, 104),
-            flags: le_u16(b, 106),
-            sector_shift: b[108],
-            cluster_shift: b[109],
-            fat_count: b[110],
-            drive_select: b[111],
-            used_percentage: b[112],
-            _reserved: bytes(b, 113),
-        })
-    }
-
-    fn write_into(&self, out: &mut [u8]) {
-        let b = &mut out[..Self::SIZE];
-        b[0..3].copy_from_slice(&self._dummy_jmp);
-        b[3..11].copy_from_slice(&self._oem_identifier);
-        b[11..64].copy_from_slice(&self._zeroed);
-        put_u64(b, 64, self._partition_offset);
-        put_u64(b, 72, self.volume_len);
-        put_u32(b, 80, self.fat_offset);
-        put_u32(b, 84, self.fat_len);
-        put_u32(b, 88, self.cluster_heap_offset);
-        put_u32(b, 92, self.cluster_count);
-        put_u32(b, 96, self.root_dir_cluster);
-        put_u32(b, 100, self.partition_serial_num);
-        put_u16(b, 104, self.fs_revision);
-        put_u16(b, 106, self.flags);
-        b[108] = self.sector_shift;
-        b[109] = self.cluster_shift;
-        b[110] = self.fat_count;
-        b[111] = self.drive_select;
-        b[112] = self.used_percentage;
-        b[113..120].copy_from_slice(&self._reserved);
-    }
 }
 
 impl ExfatBootRecord {

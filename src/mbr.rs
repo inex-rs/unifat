@@ -6,37 +6,14 @@
 
 use embedded_io::{Read, Seek, SeekFrom, Write};
 
+use crate::codec::fat::bpb::FatBpb;
+use crate::codec::fat::sector::is_valid_sector_size;
+use crate::codec::mbr::{MbrPartitionTable, PARTITION_TABLE_OFFSET};
+use crate::codec::window;
 use crate::error::{CorruptKind, FsError, FsResult};
 
 /// MBR addresses are always in 512-byte LBA units, independent of the filesystem's sector size.
 const LBA_SIZE: u64 = 512;
-
-/// On-disk boot signature (`55 AA` at bytes 510..512, little-endian).
-const MBR_SIGNATURE: u16 = 0xAA55;
-
-/// Offset of the first partition entry; four 16-byte entries follow.
-const PARTITION_TABLE_OFFSET: usize = 446;
-
-/// On-disk 16-byte primary partition table entry.
-#[derive(Debug, Clone, Copy)]
-struct MbrPartitionRaw {
-    status: u8,
-    type_byte: u8,
-    start_lba: u32,
-    sector_count: u32,
-}
-
-impl MbrPartitionRaw {
-    fn parse(b: &[u8]) -> Self {
-        Self {
-            status: b[0],
-            // CHS address bytes 1..4 and 5..8 are ignored (LBA only).
-            type_byte: b[4],
-            start_lba: u32::from_le_bytes(b[8..12].try_into().expect("16-byte entry")),
-            sector_count: u32::from_le_bytes(b[12..16].try_into().expect("16-byte entry")),
-        }
-    }
-}
 
 /// The kind of a partition, from its MBR type byte.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,19 +80,18 @@ impl PartitionTable {
         storage.seek(SeekFrom::Start(0))?;
         storage.read_exact(&mut sector).map_err(map_read_exact)?;
 
-        if u16::from_le_bytes([sector[510], sector[511]]) != MBR_SIGNATURE {
-            return Err(FsError::Unsupported);
-        }
+        // Decode checks the `55 AA` signature.
+        let mbr = MbrPartitionTable::decode(
+            window(&sector[PARTITION_TABLE_OFFSET..]).expect("the table ends the sector"),
+        )
+        .map_err(|_| FsError::Unsupported)?;
         // A filesystem VBR shares the `55 AA` signature — reject bare volumes.
         if looks_like_vbr(&sector) {
             return Err(FsError::Unsupported);
         }
 
         let mut partitions = [None; 4];
-        for (i, slot) in partitions.iter_mut().enumerate() {
-            let base = PARTITION_TABLE_OFFSET + i * 16;
-            let raw = MbrPartitionRaw::parse(&sector[base..base + 16]);
-
+        for (slot, raw) in partitions.iter_mut().zip(&mbr.partitions) {
             // Must be 0x00 (inactive) or 0x80 (active); anything else is likely VBR boot code.
             if raw.status != 0x00 && raw.status != 0x80 {
                 return Err(FsError::Unsupported);
@@ -330,9 +306,9 @@ fn looks_like_vbr(sector: &[u8; 512]) -> bool {
     if crate::boot::has_exfat_magic(sector) {
         return true;
     }
-    let jump = sector[0] == 0xEB || sector[0] == 0xE9;
-    let bytes_per_sector = u16::from_le_bytes([sector[11], sector[12]]);
-    jump && matches!(bytes_per_sector, 512 | 1024 | 2048 | 4096)
+    let bpb = FatBpb::decode(window(sector).expect("a sector holds a BPB"));
+    let jump = bpb._jmpboot[0] == 0xEB || bpb._jmpboot[0] == 0xE9;
+    jump && is_valid_sector_size(bpb.bytes_per_sector)
 }
 
 fn map_read_exact<E: embedded_io::Error>(e: embedded_io::ReadExactError<E>) -> FsError<E> {

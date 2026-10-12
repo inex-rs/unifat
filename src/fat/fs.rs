@@ -8,7 +8,7 @@ use core::{
     ops,
 };
 
-use crate::codec::FixedCodec;
+use crate::codec::window;
 use embedded_io::*;
 
 /// Version-independent geometry (sector size, cluster counts, …) computed
@@ -161,8 +161,12 @@ where
             return Err(FsError::Unsupported);
         }
 
-        let bpb =
-            FatBpb::parse(&buffer[..FAT_BPB_SIZE]).ok_or(FsError::Corrupt(CorruptKind::Codec))?;
+        let bpb = FatBpb::decode(window(&buffer).ok_or(FsError::Corrupt(CorruptKind::Codec))?);
+        // Read before a FAT32 mount reuses `buffer` for the FSInfo sector.
+        let signature = BootSectorSignature::decode(
+            window(&buffer[SIGNATURE_OFFSET..]).ok_or(FsError::Corrupt(CorruptKind::Codec))?,
+        )
+        .signature;
 
         // Reject a bogus sector size before it is used to index `buffer`
         // (a `bytes_per_sector` > MAX_SECTOR_SIZE would slice out of bounds).
@@ -171,8 +175,9 @@ where
         }
 
         let ebr = if bpb.table_size_16 == 0 {
-            let ebr_fat32 = Fat32Ebr::parse(&buffer[FAT_BPB_SIZE..FAT_BPB_SIZE + EBR_SIZE])
-                .ok_or(FsError::Corrupt(CorruptKind::Codec))?;
+            let ebr_fat32 = Fat32Ebr::decode(
+                window(&buffer[FAT_BPB_SIZE..]).ok_or(FsError::Corrupt(CorruptKind::Codec))?,
+            );
 
             // With mirroring disabled the ActiveFat index selects the one
             // live copy; an index past the FAT count is inconsistent.
@@ -187,8 +192,10 @@ where
                 u64::from(ebr_fat32.fat_info) * u64::from(bpb.bytes_per_sector),
             ))?;
             storage.read_exact(&mut buffer[..usize::from(bpb.bytes_per_sector)])?;
-            let fsinfo = Fat32FsInfo::parse(&buffer[..usize::from(bpb.bytes_per_sector)])
-                .filter(Fat32FsInfo::verify_signature)
+            let lead_ok = window(&buffer).is_some_and(|w| Fat32FsInfoLead::decode(w).is_ok());
+            let fsinfo = window(&buffer[FSINFO_OFFSET..])
+                .and_then(|wire| Fat32FsInfo::decode(wire).ok())
+                .filter(|_| lead_ok)
                 .unwrap_or_else(|| {
                     // FSInfo is advisory — never fail the mount over it.
                     // Unknown hints; the next sync writes a repaired copy.
@@ -198,13 +205,16 @@ where
 
             Ebr::Fat32(ebr_fat32, fsinfo)
         } else {
-            Ebr::Fat16(
-                Fat16Ebr::parse(&buffer[FAT_BPB_SIZE..FAT_BPB_SIZE + EBR_SIZE])
-                    .ok_or(FsError::Corrupt(CorruptKind::Codec))?,
-            )
+            Ebr::Fat16(Fat16Ebr::decode(
+                window(&buffer[FAT_BPB_SIZE..]).ok_or(FsError::Corrupt(CorruptKind::Codec))?,
+            ))
         };
 
-        let boot_record = FatBootRecord { bpb, ebr };
+        let boot_record = FatBootRecord {
+            bpb,
+            ebr,
+            signature,
+        };
 
         // FAT12 (sub-4085-cluster) volumes are intentionally unsupported
         let Some(fat_type) = boot_record.fat_type() else {

@@ -5,7 +5,7 @@
 use crate::codec::fat::DIRENTRY_SIZE;
 use crate::codec::fat::sector::MIN_SECTOR_SIZE;
 use crate::codec::fat::types::{ClusterCount, FatType, SectorCount, SectorIndex};
-use crate::codec::{FixedCodec, bytes, le_u16, le_u32, put_u16, put_u32};
+use layline::Layout;
 
 pub(crate) const BOOT_SIGNATURE: u8 = 0x29;
 // The boot-sector signature is the bytes `55 AA` at offset 510..512.
@@ -17,19 +17,18 @@ pub(crate) const FAT_SIGNATURE: u16 = 0xAA55;
 pub(crate) struct FatBootRecord {
     pub bpb: FatBpb,
     pub ebr: Ebr,
+    /// The boot-sector signature word (bytes 510..512).
+    pub signature: u16,
 }
 
 impl FatBootRecord {
     #[inline]
     pub(crate) fn verify_signature(&self) -> bool {
-        match &self.ebr {
-            Ebr::Fat16(ebr_fat16) => {
-                ebr_fat16.boot_signature == BOOT_SIGNATURE && ebr_fat16.signature == FAT_SIGNATURE
-            }
-            Ebr::Fat32(ebr_fat32, _) => {
-                ebr_fat32.boot_signature == BOOT_SIGNATURE && ebr_fat32.signature == FAT_SIGNATURE
-            }
-        }
+        let boot_signature = match &self.ebr {
+            Ebr::Fat16(ebr_fat16) => ebr_fat16.boot_signature,
+            Ebr::Fat32(ebr_fat32, _) => ebr_fat32.boot_signature,
+        };
+        boot_signature == BOOT_SIGNATURE && self.signature == FAT_SIGNATURE
     }
 
     #[inline]
@@ -138,8 +137,9 @@ impl FatBootRecord {
     }
 }
 
-pub(crate) const FAT_BPB_SIZE: usize = 36;
-#[derive(Debug, Clone)]
+pub(crate) const FAT_BPB_SIZE: usize = <FatBpb as Layout>::WIRE_BYTES;
+#[derive(Layout, Debug, Clone)]
+#[layout(bytes = 36, endian = le)]
 pub(crate) struct FatBpb {
     pub _jmpboot: [u8; 3],
     pub _oem_identifier: [u8; 8],
@@ -158,51 +158,6 @@ pub(crate) struct FatBpb {
     pub total_sectors_32: u32,
 }
 
-impl FixedCodec for FatBpb {
-    const SIZE: usize = FAT_BPB_SIZE;
-
-    fn parse(b: &[u8]) -> Option<Self> {
-        if b.len() < Self::SIZE {
-            return None;
-        }
-        Some(Self {
-            _jmpboot: bytes(b, 0),
-            _oem_identifier: bytes(b, 3),
-            bytes_per_sector: le_u16(b, 11),
-            sectors_per_cluster: b[13],
-            reserved_sector_count: le_u16(b, 14),
-            table_count: b[16],
-            root_entry_count: le_u16(b, 17),
-            total_sectors_16: le_u16(b, 19),
-            _media_type: b[21],
-            table_size_16: le_u16(b, 22),
-            _sectors_per_track: le_u16(b, 24),
-            _head_side_count: le_u16(b, 26),
-            _hidden_sector_count: le_u32(b, 28),
-            total_sectors_32: le_u32(b, 32),
-        })
-    }
-
-    fn write_into(&self, out: &mut [u8]) {
-        let b = &mut out[..Self::SIZE];
-        b[0..3].copy_from_slice(&self._jmpboot);
-        b[3..11].copy_from_slice(&self._oem_identifier);
-        put_u16(b, 11, self.bytes_per_sector);
-        b[13] = self.sectors_per_cluster;
-        put_u16(b, 14, self.reserved_sector_count);
-        b[16] = self.table_count;
-        put_u16(b, 17, self.root_entry_count);
-        put_u16(b, 19, self.total_sectors_16);
-        b[21] = self._media_type;
-        put_u16(b, 22, self.table_size_16);
-        put_u16(b, 24, self._sectors_per_track);
-        put_u16(b, 26, self._head_side_count);
-        put_u32(b, 28, self._hidden_sector_count);
-        put_u32(b, 32, self.total_sectors_32);
-    }
-}
-
-pub(crate) const EBR_SIZE: usize = MIN_SECTOR_SIZE - FAT_BPB_SIZE;
 #[derive(Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum Ebr {
@@ -210,9 +165,24 @@ pub(crate) enum Ebr {
     Fat32(Fat32Ebr, Fat32FsInfo),
 }
 
-/// The spec's shared FAT12/16 EBR layout (FAT12 itself is rejected at
-/// mount).
-#[derive(Debug, Clone)]
+// The EBR records cover only the extended BPB fields after [`FatBpb`];
+// the boot code up to the signature is opaque and never decoded (it
+// would also be ~450 bytes held per mounted volume).
+
+/// Byte offset of the boot-sector signature word.
+pub(crate) const SIGNATURE_OFFSET: usize = MIN_SECTOR_SIZE - 2;
+
+/// The boot-sector signature word (`55 AA` at bytes 510..512).
+#[derive(Layout, Debug, Clone, Copy)]
+#[layout(bytes = 2, endian = le)]
+pub(crate) struct BootSectorSignature {
+    pub signature: u16,
+}
+
+/// The spec's shared FAT12/16 extended BPB (bytes 36..62; FAT12 itself
+/// is rejected at mount).
+#[derive(Layout, Debug, Clone)]
+#[layout(bytes = 26, endian = le)]
 pub(crate) struct Fat16Ebr {
     pub _drive_num: u8,
     pub _windows_nt_flags: u8,
@@ -220,57 +190,40 @@ pub(crate) struct Fat16Ebr {
     pub volume_serial_num: u32,
     pub volume_label: [u8; 11],
     pub _system_identifier: [u8; 8],
-    pub _boot_code: [u8; 448],
-    pub signature: u16,
 }
 
-/// FAT32 BPB extended flags (`BPB_ExtFlags`).
-///
-/// Bit layout of the little-endian `u16`:
-/// `active_fat` = bits 0–3, `mirroring_disabled` = bit 7, rest reserved.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// FAT32 BPB extended flags (`BPB_ExtFlags`): `active_fat` = bits 0–3,
+/// `mirroring_disabled` = bit 7, the rest reserved (preserved on
+/// round-trips).
+#[derive(Layout, Debug, Clone, Copy, PartialEq, Eq)]
+#[layout(bits = 16, endian = le)]
 pub(crate) struct Fat32ExtendedFlags {
+    #[bits(4)]
     pub(crate) active_fat: u8,
+    #[bits(3)]
+    _reserved_low: u8,
+    #[bits(1)]
     pub(crate) mirroring_disabled: bool,
-    /// Every bit we don't interpret, preserved for round-trips.
-    reserved: u16,
-}
-
-impl Fat32ExtendedFlags {
-    const ACTIVE_FAT_MASK: u16 = 0x000F;
-    const MIRRORING_DISABLED: u16 = 0x0080;
-
-    fn decode(raw: u16) -> Self {
-        Self {
-            #[allow(clippy::cast_possible_truncation)] // masked to 4 bits
-            active_fat: (raw & Self::ACTIVE_FAT_MASK) as u8,
-            mirroring_disabled: raw & Self::MIRRORING_DISABLED != 0,
-            reserved: raw & !(Self::ACTIVE_FAT_MASK | Self::MIRRORING_DISABLED),
-        }
-    }
-
-    fn encode(self) -> u16 {
-        u16::from(self.active_fat & 0x0F)
-            | if self.mirroring_disabled {
-                Self::MIRRORING_DISABLED
-            } else {
-                0
-            }
-            | self.reserved
-    }
+    #[bits(8)]
+    _reserved_high: u8,
 }
 
 /// `BPB_FSVer`: minor at offset 42, major at 43 (Microsoft FAT32 layout).
-#[derive(Debug, Clone)]
+#[derive(Layout, Debug, Clone, PartialEq)]
+#[layout(bytes = 2)]
 pub(crate) struct FatVersion {
     minor: u8,
     major: u8,
 }
 
-#[derive(Debug, Clone)]
+/// The FAT32 extended BPB (bytes 36..90).
+#[derive(Layout, Debug, Clone)]
+#[layout(bytes = 54, endian = le)]
 pub(crate) struct Fat32Ebr {
     pub table_size_32: u32,
+    #[bytes(2)]
     pub extended_flags: Fat32ExtendedFlags,
+    #[bytes(2)]
     pub fat_version: FatVersion,
     pub root_cluster: u32,
     pub fat_info: u16,
@@ -282,158 +235,54 @@ pub(crate) struct Fat32Ebr {
     pub volume_serial_num: u32,
     pub volume_label: [u8; 11],
     pub _system_ident: [u8; 8],
-    pub _boot_code: [u8; 420],
-    pub signature: u16,
 }
 
-pub(crate) const FSINFO_SIZE: usize = 512;
-const FSINFO_LEAD_SIGNATURE: u32 = 0x41615252;
-const FSINFO_MID_SIGNATURE: u32 = 0x61417272;
-const FSINFO_TRAIL_SIGNATURE: u32 = 0xAA550000;
-#[derive(Debug, Clone)]
-pub(crate) struct Fat32FsInfo {
+/// FAT32 FSInfo lead signature (bytes 0..4 of the FSInfo sector).
+#[derive(Layout, Debug, Clone, Copy)]
+#[layout(bytes = 4, endian = le)]
+pub(crate) struct Fat32FsInfoLead {
+    #[magic(0x41615252u32)]
     pub lead_signature: u32,
-    pub _reserved1: [u8; 480],
+}
+
+impl Fat32FsInfoLead {
+    pub(crate) const VALID: Self = Self {
+        lead_signature: 0x41615252,
+    };
+}
+
+/// Byte offset of [`Fat32FsInfo`] within the FSInfo sector. The 480
+/// reserved bytes before it are never decoded or rewritten.
+pub(crate) const FSINFO_OFFSET: usize = 484;
+
+/// FAT32 FSInfo body (bytes 484..512): the free-cluster hints between the
+/// structure and trail signatures. The signatures are `#[magic]`: decode
+/// fails on a scribbled sector, and encode always writes them.
+#[derive(Layout, Debug, Clone)]
+#[layout(bytes = 28, endian = le)]
+pub(crate) struct Fat32FsInfo {
+    #[magic(0x61417272u32)]
     pub mid_signature: u32,
     pub free_cluster_count: u32,
     pub first_free_cluster: u32,
     pub _reserved2: [u8; 12],
+    #[magic(0xAA550000u32)]
     pub trail_signature: u32,
 }
 
 impl Fat32FsInfo {
-    pub(crate) fn verify_signature(&self) -> bool {
-        self.lead_signature == FSINFO_LEAD_SIGNATURE
-            && self.mid_signature == FSINFO_MID_SIGNATURE
-            && self.trail_signature == FSINFO_TRAIL_SIGNATURE
-    }
-
     /// A valid FSInfo with both hint fields "unknown" (`u32::MAX`).
     /// Used when the on-disk sector is corrupt: FSInfo is advisory, so a
     /// scribbled copy must not fail the mount — and syncing this back
     /// repairs it.
     pub(crate) fn unknown() -> Self {
         Self {
-            lead_signature: FSINFO_LEAD_SIGNATURE,
-            _reserved1: [0; 480],
-            mid_signature: FSINFO_MID_SIGNATURE,
+            mid_signature: 0x61417272,
             free_cluster_count: u32::MAX,
             first_free_cluster: u32::MAX,
             _reserved2: [0; 12],
-            trail_signature: FSINFO_TRAIL_SIGNATURE,
+            trail_signature: 0xAA550000,
         }
-    }
-}
-
-impl FixedCodec for Fat16Ebr {
-    const SIZE: usize = EBR_SIZE;
-
-    fn parse(b: &[u8]) -> Option<Self> {
-        if b.len() < Self::SIZE {
-            return None;
-        }
-        Some(Self {
-            _drive_num: b[0],
-            _windows_nt_flags: b[1],
-            boot_signature: b[2],
-            volume_serial_num: le_u32(b, 3),
-            volume_label: bytes(b, 7),
-            _system_identifier: bytes(b, 18),
-            _boot_code: bytes(b, 26),
-            signature: le_u16(b, 474),
-        })
-    }
-
-    fn write_into(&self, out: &mut [u8]) {
-        let b = &mut out[..Self::SIZE];
-        b[0] = self._drive_num;
-        b[1] = self._windows_nt_flags;
-        b[2] = self.boot_signature;
-        put_u32(b, 3, self.volume_serial_num);
-        b[7..18].copy_from_slice(&self.volume_label);
-        b[18..26].copy_from_slice(&self._system_identifier);
-        b[26..474].copy_from_slice(&self._boot_code);
-        put_u16(b, 474, self.signature);
-    }
-}
-
-impl FixedCodec for Fat32Ebr {
-    const SIZE: usize = EBR_SIZE;
-
-    fn parse(b: &[u8]) -> Option<Self> {
-        if b.len() < Self::SIZE {
-            return None;
-        }
-        Some(Self {
-            table_size_32: le_u32(b, 0),
-            extended_flags: Fat32ExtendedFlags::decode(le_u16(b, 4)),
-            fat_version: FatVersion {
-                minor: b[6],
-                major: b[7],
-            },
-            root_cluster: le_u32(b, 8),
-            fat_info: le_u16(b, 12),
-            backup_boot_sector: le_u16(b, 14),
-            _reserved: bytes(b, 16),
-            _drive_num: b[28],
-            _windows_nt_flags: b[29],
-            boot_signature: b[30],
-            volume_serial_num: le_u32(b, 31),
-            volume_label: bytes(b, 35),
-            _system_ident: bytes(b, 46),
-            _boot_code: bytes(b, 54),
-            signature: le_u16(b, 474),
-        })
-    }
-
-    fn write_into(&self, out: &mut [u8]) {
-        let b = &mut out[..Self::SIZE];
-        put_u32(b, 0, self.table_size_32);
-        put_u16(b, 4, self.extended_flags.encode());
-        b[6] = self.fat_version.minor;
-        b[7] = self.fat_version.major;
-        put_u32(b, 8, self.root_cluster);
-        put_u16(b, 12, self.fat_info);
-        put_u16(b, 14, self.backup_boot_sector);
-        b[16..28].copy_from_slice(&self._reserved);
-        b[28] = self._drive_num;
-        b[29] = self._windows_nt_flags;
-        b[30] = self.boot_signature;
-        put_u32(b, 31, self.volume_serial_num);
-        b[35..46].copy_from_slice(&self.volume_label);
-        b[46..54].copy_from_slice(&self._system_ident);
-        b[54..474].copy_from_slice(&self._boot_code);
-        put_u16(b, 474, self.signature);
-    }
-}
-
-impl FixedCodec for Fat32FsInfo {
-    const SIZE: usize = FSINFO_SIZE;
-
-    fn parse(b: &[u8]) -> Option<Self> {
-        if b.len() < Self::SIZE {
-            return None;
-        }
-        Some(Self {
-            lead_signature: le_u32(b, 0),
-            _reserved1: bytes(b, 4),
-            mid_signature: le_u32(b, 484),
-            free_cluster_count: le_u32(b, 488),
-            first_free_cluster: le_u32(b, 492),
-            _reserved2: bytes(b, 496),
-            trail_signature: le_u32(b, 508),
-        })
-    }
-
-    fn write_into(&self, out: &mut [u8]) {
-        let b = &mut out[..Self::SIZE];
-        put_u32(b, 0, self.lead_signature);
-        b[4..484].copy_from_slice(&self._reserved1);
-        put_u32(b, 484, self.mid_signature);
-        put_u32(b, 488, self.free_cluster_count);
-        put_u32(b, 492, self.first_free_cluster);
-        b[496..508].copy_from_slice(&self._reserved2);
-        put_u32(b, 508, self.trail_signature);
     }
 }
 
@@ -488,9 +337,8 @@ mod tests {
                     volume_serial_num: 0,
                     volume_label: [0; 11],
                     _system_identifier: [0; 8],
-                    _boot_code: [0; 448],
-                    signature: FAT_SIGNATURE,
                 }),
+                signature: FAT_SIGNATURE,
             }
         }
         // FirstDataSec = 1 (reserved) + 2*16 (FATs) + 2 (root) = 35.
@@ -555,9 +403,8 @@ mod tests {
                     volume_serial_num: 0,
                     volume_label: [0; 11],
                     _system_identifier: [0; 8],
-                    _boot_code: [0; 448],
-                    signature: FAT_SIGNATURE,
                 }),
+                signature: FAT_SIGNATURE,
             }
         }
 

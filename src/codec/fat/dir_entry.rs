@@ -1,19 +1,18 @@
 //! Pure FAT 32-byte directory entry layout (`DIR_*` / SFN record).
 
 use crate::attrs::{AttrBits, Attributes};
-use crate::codec::fat::DIRENTRY_SIZE;
 use crate::codec::fat::entry_time::{
     EntryCreationTime, EntryLastAccessedTime, EntryModificationTime,
 };
 use crate::codec::fat::sfn_layout::Sfn;
-use crate::codec::fat::types::FileSize;
-use crate::codec::{FixedCodec, bytes, le_u16, le_u32, put_u16, put_u32};
+use layline::{FieldCodec, Layout};
 
 /// On-disk FAT directory-entry attribute byte (`DIR_Attr`).
 ///
 /// Unknown / reserved bits are preserved on round-trip. Bit values match
 /// [`AttrBits`] / ExFAT.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(FieldCodec, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[bits(8)]
 #[repr(transparent)]
 pub(crate) struct RawAttributes(u8);
 
@@ -51,58 +50,21 @@ impl From<RawAttributes> for Attributes {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Layout, Debug, Clone, Copy)]
+#[layout(bytes = 32, endian = le)]
 pub(crate) struct RawDirEntry {
+    #[bytes(11)]
     pub(crate) sfn: Sfn,
+    #[codec(8)]
     pub(crate) attributes: RawAttributes,
     pub(crate) _reserved: [u8; 1],
+    #[bytes(5)]
     pub(crate) created: EntryCreationTime,
+    #[bytes(2)]
     pub(crate) accessed: EntryLastAccessedTime,
     pub(crate) cluster_high: u16,
+    #[bytes(4)]
     pub(crate) modified: EntryModificationTime,
     pub(crate) cluster_low: u16,
-    pub(crate) file_size: FileSize,
-}
-
-impl FixedCodec for RawDirEntry {
-    const SIZE: usize = DIRENTRY_SIZE;
-
-    fn parse(b: &[u8]) -> Option<Self> {
-        if b.len() < Self::SIZE {
-            return None;
-        }
-        Some(Self {
-            sfn: Sfn {
-                name: bytes(b, 0),
-                ext: bytes(b, 8),
-            },
-            attributes: RawAttributes(b[11]),
-            _reserved: bytes(b, 12),
-            created: EntryCreationTime::decode(b[13], le_u16(b, 14), le_u16(b, 16)),
-            accessed: EntryLastAccessedTime::decode(le_u16(b, 18)),
-            cluster_high: le_u16(b, 20),
-            modified: EntryModificationTime::decode(le_u16(b, 22), le_u16(b, 24)),
-            cluster_low: le_u16(b, 26),
-            file_size: le_u32(b, 28),
-        })
-    }
-
-    fn write_into(&self, out: &mut [u8]) {
-        let b = &mut out[..Self::SIZE];
-        b[0..8].copy_from_slice(&self.sfn.name);
-        b[8..11].copy_from_slice(&self.sfn.ext);
-        b[11] = self.attributes.0;
-        b[12..13].copy_from_slice(&self._reserved);
-        let (tenths, ctime, cdate) = self.created.encode();
-        b[13] = tenths;
-        put_u16(b, 14, ctime);
-        put_u16(b, 16, cdate);
-        put_u16(b, 18, self.accessed.encode());
-        put_u16(b, 20, self.cluster_high);
-        let (mtime, mdate) = self.modified.encode();
-        put_u16(b, 22, mtime);
-        put_u16(b, 24, mdate);
-        put_u16(b, 26, self.cluster_low);
-        put_u32(b, 28, self.file_size);
-    }
+    pub(crate) file_size: u32,
 }

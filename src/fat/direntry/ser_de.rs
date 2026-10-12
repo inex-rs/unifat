@@ -9,7 +9,6 @@ use alloc::{string::String, vec::Vec};
 use crate::FsResult;
 use crate::fat::*;
 
-use crate::codec::FixedCodec;
 use embedded_io::*;
 
 const LAST_LFN_ENTRY_MASK: u8 = 0x40;
@@ -25,8 +24,7 @@ const MAX_DIR_SLOTS: u32 = 1 << 20;
 /// first, per spec) followed by the SFN slot. A name that fits 8.3 with no
 /// case conflict yields the SFN slot only.
 pub(crate) fn compose_entry(props: &MinProperties) -> Vec<[u8; DIRENTRY_SIZE]> {
-    let mut sfn_bytes = [0u8; DIRENTRY_SIZE];
-    RawDirEntry::from(props.clone()).write_into(&mut sfn_bytes);
+    let sfn_bytes = RawDirEntry::from(props.clone()).encode();
 
     let needs_lfn = !crate::fat::as_sfn(&props.name).is_some_and(|sfn| sfn == props.sfn);
     if !needs_lfn {
@@ -43,9 +41,7 @@ pub(crate) fn compose_entry(props: &MinProperties) -> Vec<[u8; DIRENTRY_SIZE]> {
     for (i, group) in groups.enumerate().rev() {
         let order = u8::try_from(i + 1).unwrap_or(u8::MAX);
         let is_last = i + 1 == group_count;
-        let mut bytes = [0u8; DIRENTRY_SIZE];
-        lfn_slot(group, order, is_last, checksum).write_into(&mut bytes);
-        slots.push(bytes);
+        slots.push(lfn_slot(group, order, is_last, checksum).encode());
     }
     slots.push(sfn_bytes);
     slots
@@ -55,28 +51,27 @@ pub(crate) fn compose_entry(props: &MinProperties) -> Vec<[u8; DIRENTRY_SIZE]> {
 /// spec a short final run is NUL-terminated and then 0xFFFF-padded
 /// (strict readers and chkdsk flag zero padding).
 fn lfn_slot(units: &[u16], order: u8, is_last: bool, checksum: u8) -> LfnEntry {
-    let mut chars = [0xFFu8; CHARS_PER_LFN_ENTRY * 2];
-    for (i, &unit) in units.iter().enumerate() {
-        chars[i * 2..i * 2 + 2].copy_from_slice(&unit.to_le_bytes());
-    }
+    let mut chars = [0xFFFF_u16; CHARS_PER_LFN_ENTRY];
+    chars[..units.len()].copy_from_slice(units);
     if units.len() < CHARS_PER_LFN_ENTRY {
-        chars[units.len() * 2] = 0;
-        chars[units.len() * 2 + 1] = 0;
+        chars[units.len()] = 0;
     }
-    LfnEntry {
+    let mut entry = LfnEntry {
         order: if is_last {
             order | LAST_LFN_ENTRY_MASK
         } else {
             order
         },
-        first_chars: chars[..10].try_into().unwrap(),
+        first_chars: [0; 5],
         _lfn_attribute: RawAttributes::LFN.bits(),
         _long_entry_type: LONG_ENTRY_TYPE,
         checksum,
-        mid_chars: chars[10..22].try_into().unwrap(),
+        mid_chars: [0; 6],
         _zeroed: [0, 0],
-        last_chars: chars[22..].try_into().unwrap(),
-    }
+        last_chars: [0; 2],
+    };
+    entry.set_utf16_units(&chars);
+    entry
 }
 
 /// Streaming reader over a directory's slots, coalescing LFN + SFN sets into
@@ -193,10 +188,7 @@ where
             _ => {}
         }
 
-        let Some(entry) = RawDirEntry::parse(&slot[..]) else {
-            self.cursor = None;
-            return Ok(None);
-        };
+        let entry = RawDirEntry::decode(&slot);
 
         // Track the on-disk extent of the set being built.
         self.set_start.get_or_insert(pos);
@@ -273,9 +265,7 @@ where
     /// falls back to the 8.3 name for such runs rather than surfacing a
     /// garbled partial long name.
     fn consume_lfn(&mut self, slot: &[u8; DIRENTRY_SIZE]) -> LfnStep {
-        let Some(lfn) = LfnEntry::parse(&slot[..]) else {
-            return LfnStep::Orphan;
-        };
+        let lfn = LfnEntry::decode(slot);
         if !lfn.verify_signature() {
             return LfnStep::Orphan;
         }
@@ -327,7 +317,7 @@ where
             // Pieces were gathered highest-order-first; reverse to read order.
             self.lfn_pieces.iter().rev().cloned().collect()
         } else {
-            entry.sfn.decode()
+            entry.sfn.to_name()
         }
     }
 }

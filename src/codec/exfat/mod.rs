@@ -1,10 +1,11 @@
 //! Pure ExFAT on-disk layouts (bytes ↔ structs). No volume state, no paths.
 //!
 //! Import concrete items from submodules, e.g. [`boot::ExfatBootRecord`],
-//! [`consts::EXFAT_ENTRY_SIZE`], [`raw_entry::ExfatFileEntry`].
+//! [`consts::EXFAT_ENTRY_SIZE`], [`entry_set::ExfatEntrySet`].
 
 pub(crate) mod boot;
 pub(crate) mod consts;
+pub(crate) mod entry_set;
 pub(crate) mod raw_entry;
 
 /// exFAT `NameHash` (spec §7.6.5): rotate-right-by-one + add over each byte

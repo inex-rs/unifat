@@ -7,7 +7,9 @@ use crate::attrs::AttrBits;
 
 use super::timestamp::{decode_date, decode_datetime};
 use super::{END_OF_DIRECTORY, ENTRY_IN_USE, ENTRY_TYPE_FILE, EXFAT_ENTRY_SIZE, FAT_BAD, FAT_EOC};
-use crate::codec::exfat::raw_entry::{ExfatFileEntry, ExfatFileNameEntry, ExfatStreamExtension};
+use layline::Message;
+
+use crate::codec::exfat::entry_set::ExfatEntrySet;
 
 /// File attribute bits at offset 0x04 of the primary File entry;
 /// same low-byte layout as classic FAT ([`AttrBits`]).
@@ -65,21 +67,6 @@ impl ExfatDirEntry {
     }
 }
 
-/// ExFAT entry-set checksum (`SetChecksum`): rotate-right + add per
-/// byte, skipping bytes
-/// 2-3 of the first (File) entry, which hold the checksum itself.
-pub(crate) fn entry_set_checksum(data: &[u8]) -> u16 {
-    let mut sum: u16 = 0;
-    for (i, &b) in data.iter().enumerate() {
-        if i == 2 || i == 3 {
-            continue;
-        }
-        sum = (sum >> 1) | ((sum & 1) << 15);
-        sum = sum.wrapping_add(u16::from(b));
-    }
-    sum
-}
-
 /// Decoder assembling File + Stream Extension + File Name entry sets
 /// from an in-memory directory-cluster buffer into [`ExfatDirEntry`]s.
 pub(crate) struct DirEntryDecoder {
@@ -129,46 +116,24 @@ impl DirEntryDecoder {
     /// failure so the caller decides how far to skip.
     fn try_decode_file_set(&mut self) -> Option<ExfatDirEntry> {
         let start = self.pos;
-        let first = self.buf.get(start..start + EXFAT_ENTRY_SIZE)?;
-        let file = ExfatFileEntry::parse(first)?;
-        let secondary_count = usize::from(file.secondary_count);
-        // A set needs at least the Stream Extension secondary.
-        if secondary_count < 1 {
-            return None;
-        }
-        let set_bytes = (1 + secondary_count) * EXFAT_ENTRY_SIZE;
-        let set = self.buf.get(start..start + set_bytes)?;
+        // Checks the File/Stream/Name entry types, that the set holds at
+        // least the Stream Extension, and the SetChecksum.
+        let (set, set_bytes) = ExfatEntrySet::decode(self.buf.get(start..)?).ok()?;
 
-        if entry_set_checksum(set) != file.set_checksum {
-            return None;
-        }
+        let attributes = AttrBits::from_u16(set.attributes);
+        let created = decode_datetime(set.create_timestamp, set.create_10ms);
+        let modified = decode_datetime(set.modified_timestamp, set.modified_10ms);
+        let accessed = decode_date(set.accessed_timestamp);
 
-        let attributes = AttrBits::from_u16(file.attributes);
-        let created = decode_datetime(file.create_timestamp, file.create_10ms);
-        let modified = decode_datetime(file.modified_timestamp, file.modified_10ms);
-        let accessed = decode_date(file.accessed_timestamp);
-
-        // The Stream Extension is always the first secondary.
-        let stream = ExfatStreamExtension::parse(&set[EXFAT_ENTRY_SIZE..EXFAT_ENTRY_SIZE * 2])?;
-        let no_fat_chain = stream.no_fat_chain();
+        let stream = set.stream;
         let name_length = usize::from(stream.name_length);
-        let valid_data_length = stream.valid_data_length;
-        let first_cluster = stream.first_cluster;
-        let data_length = stream.data_length;
 
-        // File Name secondaries hold 15 UCS-2 units each.
-        let mut name_u16: Vec<u16> = Vec::with_capacity(name_length);
-        let name_entries = secondary_count - 1;
-        for i in 0..name_entries {
-            let off = EXFAT_ENTRY_SIZE * (2 + i);
-            let fname = ExfatFileNameEntry::parse(&set[off..off + EXFAT_ENTRY_SIZE])?;
-            for &unit in &fname.name {
-                if name_u16.len() >= name_length {
-                    break;
-                }
-                name_u16.push(unit);
-            }
-        }
+        let mut name_u16: Vec<u16> = set
+            .names
+            .iter()
+            .flat_map(|fname| fname.name)
+            .take(name_length)
+            .collect();
         // A malformed set may promise more name chars than are present.
         name_u16.truncate(name_length);
         let name = String::from_utf16(&name_u16).ok()?;
@@ -178,10 +143,10 @@ impl DirEntryDecoder {
         Some(ExfatDirEntry {
             name,
             attributes,
-            first_cluster,
-            valid_data_length,
-            data_length,
-            no_fat_chain,
+            first_cluster: stream.first_cluster,
+            valid_data_length: stream.valid_data_length,
+            data_length: stream.data_length,
+            no_fat_chain: stream.no_fat_chain(),
             // The decoder can't know the buffer's on-disk location;
             // `ExfatReadDir` fills in the real location before yielding.
             loc: None,
@@ -239,49 +204,19 @@ pub(crate) struct DirExtent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloc::vec;
     use alloc::vec::Vec;
-
-    #[test]
-    fn checksum_skips_bytes_2_and_3() {
-        // Differing only in checksum bytes 2-3 → identical sums.
-        let a = [0x85u8, 0x01, 0xAA, 0xBB, 0x20, 0x00];
-        let b = [0x85u8, 0x01, 0x11, 0x22, 0x20, 0x00];
-        assert_eq!(entry_set_checksum(&a), entry_set_checksum(&b));
-    }
-
-    #[test]
-    fn checksum_reacts_to_other_bytes() {
-        let base = [0x85u8, 0x01, 0x00, 0x00, 0x20, 0x00];
-        let mut bumped = base;
-        bumped[5] = 0x21;
-        assert_ne!(entry_set_checksum(&base), entry_set_checksum(&bumped));
-    }
 
     /// Build a well-formed File + Stream Extension + File Name entry
     /// set for the given name, with a correct `SetChecksum`.
     fn synth_entry_set(name: &str, is_dir: bool, first_cluster: u32, size: u64) -> Vec<u8> {
-        use crate::codec::exfat::raw_entry::{
-            ExfatFileEntry, ExfatFileNameEntry, ExfatStreamExtension,
-        };
+        use crate::codec::exfat::{entry_set::ExfatEntrySet, raw_entry::ExfatStreamExtension};
 
         let name_u16: Vec<u16> = name.encode_utf16().collect();
-        let name_entries_needed = name_u16.len().div_ceil(15);
-        let secondary_count = 1 + name_entries_needed; // Stream + N FileName
-        let total_entries = 1 + secondary_count;
-        let mut set = vec![0u8; total_entries * EXFAT_ENTRY_SIZE];
-
         let attrs = if is_dir {
             AttrBits::DIRECTORY.bits()
         } else {
             AttrBits::ARCHIVE.bits()
         };
-        let file = ExfatFileEntry::new_zeroed(
-            u8::try_from(secondary_count).expect("test entry sets stay under 255 entries"),
-            attrs,
-        );
-        file.write_into(&mut set[..EXFAT_ENTRY_SIZE]);
-
         let stream = ExfatStreamExtension::new(
             u8::try_from(name_u16.len()).expect("test names fit in 255 UCS-2 units"),
             first_cluster,
@@ -289,18 +224,7 @@ mod tests {
             size,
             false,
         );
-        stream.write_into(&mut set[EXFAT_ENTRY_SIZE..EXFAT_ENTRY_SIZE * 2]);
-
-        for (i, chunk) in name_u16.chunks(15).enumerate() {
-            let off = EXFAT_ENTRY_SIZE * (2 + i);
-            ExfatFileNameEntry::from_units(chunk).write_into(&mut set[off..off + EXFAT_ENTRY_SIZE]);
-        }
-
-        set[0x02] = 0;
-        set[0x03] = 0;
-        let sum = entry_set_checksum(&set);
-        set[0x02..0x04].copy_from_slice(&sum.to_le_bytes());
-        set
+        ExfatEntrySet::new(&name_u16, attrs, stream).encode()
     }
 
     #[test]
