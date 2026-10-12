@@ -2,10 +2,6 @@
 //! Extension, then a chain of File Name secondaries. The `SetChecksum`
 //! covers the whole set, so the set (not each entry) is the decoding unit.
 
-// layline's `Message` derive emits a hidden `Layout` block deriving
-// `PartialEq` without `Eq`; the allow must sit at module scope to reach it.
-#![allow(clippy::derive_partial_eq_without_eq)]
-
 use alloc::vec::Vec;
 
 use layline::{Checksum, Message};

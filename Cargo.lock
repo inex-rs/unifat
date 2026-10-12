@@ -47,9 +47,9 @@ dependencies = [
 
 [[package]]
 name = "layline"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8dd0870deaafedf80c072a00dc10cad3e8874d315a057a03c18ca693ae8bc894"
+checksum = "1ce9c31b0297ac4d9be0ea4d8e29c0c0c784bd06b6962cf16329c14d427135b5"
 dependencies = [
  "layline-core",
  "layline-derive",
@@ -57,9 +57,9 @@ dependencies = [
 
 [[package]]
 name = "layline-codegen"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3090ba13df4df0837cf30bda7b936001308fe8ddca720e94f0c6185382699ef0"
+checksum = "47520b5f42587df3453323d7e58ab106e25ac824a71e0145bb2da029d3350018"
 dependencies = [
  "layline-core",
  "proc-macro2",
@@ -69,15 +69,15 @@ dependencies = [
 
 [[package]]
 name = "layline-core"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c6bb9675b339c5ef1e5d136a0271bd8bf402ea638849628092ea399050399790"
+checksum = "cc178183f8aa4f1aec22ef70e7dec5667f483a024498fde4e47034e1fcc1b027"
 
 [[package]]
 name = "layline-derive"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a31546f5f89833e77d6e03a4f464687a3967546ddbe425d1942e890c779c4509"
+checksum = "2bcf83826b5d0000924fd6fa61018c389c074f71f4a429021342ae7f1ef8c421"
 dependencies = [
  "layline-codegen",
  "proc-macro2",
@@ -234,7 +234,7 @@ checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
 
 [[package]]
 name = "unifat"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "embedded-io",
  "flate2",
