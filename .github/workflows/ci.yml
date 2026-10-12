@@ -29,6 +29,13 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
 
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Advisories, licences, bans and sources, per `deny.toml`.
+      - uses: EmbarkStudios/cargo-deny-action@v2
+
   miri:
     runs-on: ubuntu-latest
     steps:
