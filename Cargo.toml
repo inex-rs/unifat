@@ -2,7 +2,6 @@
 name = "unifat"
 version = "0.2.0"
 edition = "2024"
-rust-version = "1.88"
 description = "no_std-friendly FAT16/32 and ExFAT filesystem driver with one unified API."
 repository = "https://github.com/inex-rs/unifat"
 license = "MPL-2.0"
